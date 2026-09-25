@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Syed Ali — Product Designer · Player One</title>
+    <meta name="description" content="The guy who designs things and brings them to life, cuz why not. Pick a cartridge, press start." />
+    <meta name="theme-color" content="#0b0b0c" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%23f5b523' stroke='%23f7efe9' stroke-width='4'/%3E%3Cpath d='M24 22v8M40 22v8' stroke='%232b1a0a' stroke-width='5' stroke-linecap='round'/%3E%3Cpath d='M20 38a13 13 0 0 0 24 0' fill='none' stroke='%232b1a0a' stroke-width='5' stroke-linecap='round'/%3E%3C/svg%3E" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link id="gf" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:ital,wdth,wght@0,62..125,100..900;1,62..125,100..900&family=Archivo+Black&family=Oswald:wght@400;500;600&family=Pacifico&family=VT323&display=swap" />
+  </head>
+  <body data-route="home">
+    <canvas id="gl" aria-hidden="true"></canvas>
+    <div id="app"></div>
+
+    <header class="chrome">
+      <a class="brand" href="/" data-home>
+        <span class="brand-mark" aria-hidden="true">☺</span>
+        <span class="brand-text"><b>Syed Ali</b><small>Product Designer</small></span>
+      </a>
+      <nav class="nav" aria-label="Main">
+        <a href="/#work" data-nav="work">Work</a>
+        <a href="/#about" data-nav="about">About</a>
+        <a href="/#contact" data-nav="contact">Contact</a>
+        <button class="sound" type="button" aria-pressed="true" data-cursor="Mute"><span class="eq" aria-hidden="true"><i></i><i></i><i></i></span><span class="sound-label">Sound on</span></button>
+      </nav>
+    </header>
+    <p class="corner corner-l" aria-hidden="true"><span class="clock">BLR --:--</span></p>
+    <p class="corner corner-r" aria-hidden="true"><span class="sec-label">Title screen</span></p>
+
+    <nav class="hud" aria-label="Case study levels" hidden>
+      <button type="button" class="hud-btn" data-lvl="-1" style="--b:#2f62e6" aria-label="Previous level" data-cursor="Prev level"><span aria-hidden="true">◀</span></button>
+      <div class="hud-screen">
+        <span class="hud-n">LVL 00</span><span class="hud-name">Title</span>
+        <span class="hud-bar" aria-hidden="true"><i></i></span>
+      </div>
+      <button type="button" class="hud-btn" data-lvl="1" style="--b:#ec3f26" aria-label="Next level" data-cursor="Next level"><span aria-hidden="true">▶</span></button>
+      <a class="hud-btn eject" href="/#work" data-eject style="--b:#f2b52c" aria-label="Eject cartridge" data-cursor="Eject"><span aria-hidden="true">⏏</span></a>
+    </nav>
+
+    <div class="cursor-tag" aria-hidden="true"></div>
+    <div class="toast" role="status" aria-live="polite"></div>
+    <div class="crt" aria-hidden="true"></div>
+    <dialog class="lightbox"><img alt="" /><button type="button" class="lb-close">Close ✕</button></dialog>
+
+    <div id="loader" class="loader">
+      <div class="loader-inner">
+        <p class="ld-sys">Player one system</p>
+        <p class="ld-name">Syed Ali</p>
+        <div class="ld-bar" aria-hidden="true"><i></i></div>
+        <p class="ld-pct" role="status">Loading 00%</p>
+        <div class="ld-start" hidden>
+          <button type="button" class="arcade-btn" data-start="sound"><span>▶ Press start</span><kbd>↵</kbd></button>
+          <button type="button" class="ld-mute" data-start="mute">Start without sound</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
