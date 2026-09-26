@@ -1,104 +1,78 @@
 import * as THREE from 'three'
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js'
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
-import { BokehPass } from 'three/addons/postprocessing/BokehPass.js'
-import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js'
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
 import { setMaxAniso } from '../util.js'
 
 export const FOV = 30
 
+const coarse = matchMedia('(pointer: coarse)').matches
+const maxDpr = Math.min(devicePixelRatio || 1, 2)
+// quality ladder: pixel ratios to step down through when frames run long (phones start at <= 1.5)
+const TIERS = [...new Set([maxDpr, Math.min(maxDpr, 1.5), Math.min(maxDpr, 1.25), 1])]
+
+// One direct pass: no post-processing chain, no shadow maps. On an integrated GPU the composer alone
+// (MSAA float target + bloom + output + grain) cost ~20ms a frame; the scene itself is ~5ms.
+// Contact shadows are baked into the console's textures, tone mapping happens inside each material
+// and the vignette lives in the backdrop shader.
 export function createStage(canvas) {
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' })
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, stencil: false, powerPreference: 'high-performance' })
+  let tier = coarse ? Math.max(0, TIERS.findIndex((d) => d <= 1.5)) : 0
+  renderer.setPixelRatio(TIERS[tier])
   renderer.toneMapping = THREE.NeutralToneMapping
-  renderer.shadowMap.enabled = true
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap
+  renderer.debug.checkShaderErrors = import.meta.env.DEV // the status checks stall compiles; only worth it while developing
   setMaxAniso(renderer.capabilities.getMaxAnisotropy())
 
   const scene = new THREE.Scene()
   const pmrem = new THREE.PMREMGenerator(renderer)
   scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
-  scene.environmentIntensity = 0.5
+  scene.environmentIntensity = 0.42
+  pmrem.dispose()
 
   const camera = new THREE.PerspectiveCamera(FOV, 1, 0.05, 100)
   camera.position.set(0, 0.12, 7)
 
-  scene.add(new THREE.HemisphereLight('#cfeee8', '#2a1e1c', 0.3))
-  const key = new THREE.DirectionalLight('#fff3ea', 1.9)
+  scene.add(new THREE.HemisphereLight('#cfeee8', '#2a1e1c', 0.34))
+  const key = new THREE.DirectionalLight('#fff3ea', 1.7)
   key.position.set(4.5, 4, 5.5)
-  key.castShadow = true
-  key.shadow.mapSize.set(2048, 2048)
-  Object.assign(key.shadow.camera, { left: -3, right: 3, top: 3, bottom: -3, near: 1, far: 24 })
-  key.shadow.bias = -0.0004
-  key.shadow.normalBias = 0.012
-  const rim = new THREE.DirectionalLight('#bfe4ff', 0.55)
+  const rim = new THREE.DirectionalLight('#bfe4ff', 0.35)
   rim.position.set(-1.5, 5, -3)
   // a soft fill from behind so the sticker-covered back isn't a black hole
-  const back = new THREE.DirectionalLight('#ffe9df', 0.85)
+  const back = new THREE.DirectionalLight('#ffe9df', 0.7)
   back.position.set(-3, 2.5, -6)
   scene.add(key, key.target, rim, back)
 
-  const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 })
-  const composer = new EffectComposer(renderer, rt)
-  composer.addPass(new RenderPass(scene, camera))
-  const bokeh = new BokehPass(scene, camera, { focus: 7, aperture: 0, maxblur: 0.009 })
-  bokeh.enabled = false
-  composer.addPass(bokeh)
-  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.55, 0.4, 1.6)
-  composer.addPass(bloom)
-  composer.addPass(new OutputPass())
-  const grain = new ShaderPass({
-    uniforms: { tDiffuse: { value: null }, uTime: { value: 0 } },
-    vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-    fragmentShader: /* glsl */`
-      uniform sampler2D tDiffuse; uniform float uTime; varying vec2 vUv;
-      float h(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
-      void main(){
-        vec4 c = texture2D(tDiffuse, vUv);
-        float n = h(vUv * vec2(1731.0, 977.0) + fract(uTime) * 113.0);
-        c.rgb += (n - 0.5) * 0.045;
-        vec2 d = vUv - 0.5; c.rgb *= 1.0 - dot(d, d) * 0.5;
-        gl_FragColor = c;
-      }`,
-  })
-  composer.addPass(grain)
-
-  // Objects that must not write into the DoF depth pass (full-screen background etc.)
-  const noDepth = []
-  const bokehRender = bokeh.render.bind(bokeh)
-  bokeh.render = (...a) => {
-    const vis = noDepth.map((o) => o.visible)
-    noDepth.forEach((o) => (o.visible = false))
-    bokehRender(...a)
-    noDepth.forEach((o, i) => (o.visible = vis[i]))
-  }
-
+  // Sized to the *large* viewport (100lvh, see #gl in CSS) so a phone's URL bar showing/hiding
+  // never forces the drawing buffer to be reallocated mid-scroll.
+  const probe = document.createElement('div')
+  probe.style.cssText = 'position:fixed;left:0;top:0;width:0;height:100lvh;visibility:hidden;pointer-events:none'
+  document.body.appendChild(probe)
   const size = { w: 1, h: 1, aspect: 1 }
   function resize() {
-    size.w = innerWidth; size.h = innerHeight; size.aspect = size.w / size.h
+    size.w = innerWidth; size.h = Math.max(innerHeight, probe.offsetHeight); size.aspect = size.w / size.h
     camera.aspect = size.aspect
     camera.updateProjectionMatrix()
     renderer.setSize(size.w, size.h, false)
-    composer.setPixelRatio(renderer.getPixelRatio())
-    composer.setSize(size.w, size.h)
   }
 
-  function setDof(amount, focus) {
-    const on = amount > 0.02
-    bokeh.enabled = on
-    if (!on) return
-    bokeh.uniforms.focus.value = focus
-    bokeh.uniforms.aperture.value = 0.022 * amount
-    bokeh.uniforms.maxblur.value = 0.014 * amount
+  const render = () => renderer.render(scene, camera)
+
+  // Adaptive resolution: step the pixel ratio down after ~1.5s of sub-45fps frames, back up after 8s of
+  // smooth ones. Two drops and it stays put, so a borderline GPU doesn't oscillate.
+  const perf = { on: false, ema: 16.7, slow: 0, fast: 0, hold: 0, drops: 0 }
+  function setTier(i) {
+    tier = i
+    renderer.setPixelRatio(TIERS[i])
+    renderer.setSize(size.w, size.h, false)
+    perf.slow = perf.fast = 0
+    perf.hold = 2
+  }
+  function adapt(ms) {
+    if (!perf.on || ms > 100 || document.hidden) return // tab switches and one-off hitches don't count
+    perf.ema += (ms - perf.ema) * 0.05
+    if (perf.hold > 0) { perf.hold -= ms / 1000; return }
+    if (perf.ema > 22) { perf.slow += ms; perf.fast = 0 } else if (perf.ema < 17.5) { perf.fast += ms; perf.slow = 0 } else perf.slow = perf.fast = 0
+    if (perf.slow > 1500 && tier < TIERS.length - 1) { perf.drops++; setTier(tier + 1) }
+    else if (perf.fast > 8000 && tier > 0 && perf.drops < 2) setTier(tier - 1)
   }
 
-  function render(dt, t) {
-    grain.uniforms.uTime.value = t
-    composer.render(dt)
-  }
-
-  return { renderer, scene, camera, key, composer, bloom, size, resize, render, setDof, noDepth }
+  return { renderer, scene, camera, key, size, resize, render, adapt, perf, dpr: () => TIERS[tier] }
 }

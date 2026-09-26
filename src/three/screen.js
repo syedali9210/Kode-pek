@@ -22,8 +22,8 @@ function px(c, text, x, y, size, color = '#ecffec', align = 'left') {
 }
 function fitDisplay(c, text, maxW, size) {
   let fs = size
-  c.font = `${fs}px "Archivo Black"`
-  while (c.measureText(text).width > maxW && fs > 30) { fs -= 4; c.font = `${fs}px "Archivo Black"` }
+  c.font = `800 ${fs}px "Unbounded"`
+  while (c.measureText(text).width > maxW && fs > 30) { fs -= 4; c.font = `800 ${fs}px "Unbounded"` }
   return fs
 }
 function pips(c, n, total, x, y, color) {
@@ -36,6 +36,7 @@ function pips(c, n, total, x, y, color) {
 
 export function createScreen(device) {
   const c = device.content.getContext('2d')
+  c.scale(device.content.width / SW, device.content.height / SH) // draw in 1024x716 coords whatever the canvas size
   // gain: how hard bright pixels glow. Pixel-text cards glow; UI screenshots (mostly white) must not bloom out.
   const commit = (glitch = 0.5, gain = 0.9) => { device.contentTex.needsUpdate = true; device.screenMat.uniforms.uGain.value = gain; device.state.glitch = Math.max(device.state.glitch, glitch) }
   let token = 0 // bumps on every draw so late image loads don't overwrite a newer card
@@ -91,9 +92,9 @@ export function createScreen(device) {
         c.textBaseline = 'alphabetic'
         const words = t.split(' ')
         let fs = 118
-        c.font = `${fs}px "Archivo Black"`
+        c.font = `800 ${fs}px "Unbounded"`
         let lines = wrapLines(c, t, SW - 2 * M)
-        while ((lines.length > 2 || lines.some((l) => c.measureText(l).width > SW - 2 * M)) && fs > 50) { fs -= 6; c.font = `${fs}px "Archivo Black"`; lines = wrapLines(c, t, SW - 2 * M) }
+        while ((lines.length > 2 || lines.some((l) => c.measureText(l).width > SW - 2 * M)) && fs > 50) { fs -= 6; c.font = `800 ${fs}px "Unbounded"`; lines = wrapLines(c, t, SW - 2 * M) }
         c.fillStyle = '#fff'; c.textAlign = 'left'
         lines.forEach((l, i) => c.fillText(l, M, 300 + i * fs * 0.95 - (lines.length - 1) * fs * 0.4))
         if (words.length) px(c, lv.kicker ? lv.kicker.toUpperCase() : '', M, 470, 44, hexA('#ecffec', 0.8))

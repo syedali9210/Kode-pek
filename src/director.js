@@ -8,19 +8,18 @@ import { audio, sfx } from './audio.js'
 import { projects, stickers } from './content.js'
 
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z)
-export const STACKED = matchMedia('(max-width: 820px), (max-aspect-ratio: 21/20)')
+export const STACKED = matchMedia('(max-aspect-ratio: 21/20), (max-width: 820px) and (max-aspect-ratio: 13/10)')
 const REST = V(-0.16, 0.5, 0.1)
 const ABOUT_ROT = V(0.06, Math.PI - 0.42, -0.05)
 const STAR_OFF = V(0.42, 1.12, -0.9), BADGE_OFF = V(-0.5, -1.05, -0.55)
 
 function pose(o = {}) {
-  return { cam: V(), look: V(), rigPos: V(), rigRot: REST.clone(), scale: 1, poster: 0, dof: 0, focus: V(), ...o }
+  return { cam: V(), look: V(), rigPos: V(), rigRot: REST.clone(), scale: 1, poster: 0, close: 0, ...o }
 }
 function lerpPose(out, a, b, f) {
   out.cam.lerpVectors(a.cam, b.cam, f); out.look.lerpVectors(a.look, b.look, f)
   out.rigPos.lerpVectors(a.rigPos, b.rigPos, f); out.rigRot.lerpVectors(a.rigRot, b.rigRot, f)
-  out.focus.lerpVectors(a.focus, b.focus, f)
-  out.scale = lerp(a.scale, b.scale, f); out.poster = lerp(a.poster, b.poster, f); out.dof = lerp(a.dof, b.dof, f)
+  out.scale = lerp(a.scale, b.scale, f); out.poster = lerp(a.poster, b.poster, f); out.close = lerp(a.close, b.close, f)
   return out
 }
 function copyPose(out, a) { return lerpPose(out, a, a, 0) }
@@ -29,12 +28,14 @@ export function createDirector({ stage, device, poster, screen, carts, homeCart,
   const { camera } = stage
   const rig = device.rig
   const entries = stickers.filter((s) => s.entry)
+  const WORKS_END = 2, ABOUT = 3, CONTACT = ABOUT + entries.length // shot indices
   const N = projects.length
-  let shots = [], casePose = pose(), frontPose = pose(), zoomPose = pose(), catchPose = pose()
+  let shots = [], casePose = pose(), caseReadPose = pose(), frontPose = pose(), zoomPose = pose(), catchPose = pose()
   const cur = pose(), target = pose()
   const F = { dist: 7, hh: 2, hw: 2, wide: true }
   let seq = null // an active sequence overrides the scroll-driven pose
-  const tilt = { x: 0, y: 0 }
+  const tilt = { x: 0, y: 0, lean: 0, lift: 0 }
+  const extra = { spin: 0 } // one-off flourishes (the konami barrel roll) layered on top of the pose
 
   // ---------------------------------------------------------------- layout: build every shot for this viewport
   function layout() {
@@ -42,13 +43,14 @@ export function createDirector({ stage, device, poster, screen, carts, homeCart,
     F.dist = Math.max(4.0 / (2 * t), 3.45 / (2 * t * a))
     F.hh = F.dist * t; F.hw = F.hh * a
     F.wide = !STACKED.matches // same query as the CSS stacked layout, so 3D framing and DOM switch together
+    const short = innerHeight < 560
     const eye = V(0, 0.12, F.dist), at = V(0, 0.12, 0)
     // landscape: nudge the console left so the tagline gets the empty bottom-right corner, like the poster's haze
     // wide: console holds the left half, the headline gets the right column. narrower wide screens shrink it to fit.
     const hero = pose({
       cam: eye.clone(), look: at.clone(), poster: 1,
       // stacked: console fits the top ~55% of the screen (tag to cartridge is ~3.5 units tall), copy below
-      rigPos: V(F.wide ? -F.hw * 0.33 : 0, !F.wide ? F.hh * 0.42 : 0, 0),
+      rigPos: V(F.wide ? -F.hw * 0.38 : 0, !F.wide ? F.hh * 0.42 : 0, 0),
       scale: F.wide ? Math.min(1, Math.max(0.74, a / 1.7)) : Math.min(0.92, (1.1 * F.hh) / 3.5),
     })
 
@@ -64,17 +66,18 @@ export function createDirector({ stage, device, poster, screen, carts, homeCart,
     const about = entries.map((s) => {
       const p = device.stickerWorld(s.id)
       if (F.wide) {
-        // oblique close-up: the camera sits off to one side so the flat back recedes and DoF melts everything but this sticker
-        const d = 3.2, th = 0.5
-        const c = p.clone().addScaledVector(n, d * Math.cos(th)).addScaledVector(right, -d * Math.sin(th)).addScaledVector(up, 0.18)
-        return pose({ cam: c, look: p.clone().addScaledVector(right, 0.85), rigRot: ABOUT_ROT.clone(), dof: 1, focus: p })
+        // the whole back sits in the left column (copy starts at 56vw), panning toward each sticker; the spotlight picks it out
+        const hd = Math.max(1.55, 2.7 / a), d = hd / t, th = 0.28
+        const aim = center.clone().lerp(p, 0.45).addScaledVector(right, 0.5 * hd * a)
+        const c = aim.clone().addScaledVector(n, d * Math.cos(th)).addScaledVector(right, -d * Math.sin(th)).addScaledVector(up, 0.15)
+        return pose({ cam: c, look: aim, rigRot: ABOUT_ROT.clone(), close: 1 })
       }
       // narrow: the whole back sits in the top ~60% (copy lives below), panning a little toward each sticker
-      const d = Math.max(8.2, 1.15 / (t * a))
+      const d = Math.max(9.4, 1.15 / (t * a))
       const hd = d * t
-      const aim = center.clone().lerp(p, 0.35).addScaledVector(up, -0.42 * hd)
+      const aim = center.clone().lerp(p, 0.35).addScaledVector(up, -0.5 * hd)
       const c = aim.clone().addScaledVector(n, d).addScaledVector(right, -0.9).addScaledVector(up, 0.3)
-      return pose({ cam: c, look: aim, rigRot: ABOUT_ROT.clone(), dof: 0.6, focus: p })
+      return pose({ cam: c, look: aim, rigRot: ABOUT_ROT.clone(), close: 0.6 })
     })
     rig.position.copy(saved.p); rig.rotation.copy(saved.r); rig.scale.setScalar(saved.s)
 
@@ -86,20 +89,29 @@ export function createDirector({ stage, device, poster, screen, carts, homeCart,
     })
     const contact = pose({
       cam: eye.clone(), look: at.clone(), poster: 1,
-      rigPos: F.wide ? V(F.hw * 0.4, 0.05, 0) : V(0, F.hh * 0.28, 0),
+      // stacked: same slot as the hero console (top ~55%), the copy sits below
+      rigPos: F.wide ? V(F.hw * 0.4, 0.05, 0) : V(0, F.hh * 0.5, 0),
       rigRot: V(-0.12, 0.42, 0.08),
-      scale: F.wide ? 0.95 : 0.72,
+      scale: F.wide ? 0.95 : Math.min(0.72, (0.8 * F.hh) / 3.5), // the contact copy is taller than the hero's
     })
-    shots = [hero, ...about, works, works, contact]
+    // shot order mirrors the DOM markers: hero, works (in + end), one per sticker, contact
+    shots = [hero, works, works, ...about, contact]
     // where the console waits to catch a flying cartridge
     catchPose = F.wide ? works : pose({ cam: eye.clone(), look: at.clone(), rigPos: V(0, -F.hh * 0.28, 0), rigRot: V(-0.05, -0.2, 0.02), scale: 0.62 })
 
     casePose = pose({
       cam: eye.clone(), look: at.clone(), poster: !F.wide ? 0 : 1,
       // desktop: lifted so the cartridge + ring clear the HUD mini-console docked bottom-left
-      rigPos: !F.wide ? V(0, F.hh * 0.48, 0) : V(-F.hw * 0.52, 0.2, 0),
+      rigPos: !F.wide ? V(0, F.hh * 0.48, 0) : V(-F.hw * 0.52, short ? 0.5 : 0.2, 0),
       rigRot: V(-0.1, 0.42, 0.05),
-      scale: !F.wide ? 0.56 : Math.min(0.84, F.hw * 0.26),
+      scale: !F.wide ? 0.56 : short ? 0.7 : Math.min(0.84, F.hw * 0.26), // short landscape: leave room for the HUD
+    })
+    // reading: the console docks small in the left rail (--rail in CSS, ~32vw) above the HUD, still showing the level
+    caseReadPose = !F.wide ? casePose : pose({
+      cam: eye.clone(), look: at.clone(), poster: 1,
+      rigPos: V(-F.hw * 0.68, short ? F.hh * 0.2 : F.hh * 0.12, 0),
+      rigRot: V(-0.08, 0.36, 0.04),
+      scale: Math.min(0.6, F.hw * 0.17, short ? 0.46 : 1),
     })
     // insert sequence poses: square up to camera, then dive into the screen
     const sc = V(0, 0.5, FZ - 0.055)
@@ -112,7 +124,7 @@ export function createDirector({ stage, device, poster, screen, carts, homeCart,
   // ---------------------------------------------------------------- which part of the home page we're in
   function homeSection() {
     const s = Math.round(scroll.shot)
-    return s === 0 ? 'title' : s <= entries.length ? 'about' : s <= entries.length + 2 ? 'works' : 'contact'
+    return s === 0 ? 'title' : s <= WORKS_END ? 'works' : s < CONTACT ? 'about' : 'contact'
   }
   const focusIndex = () => Math.round(scroll.works * (N - 1))
 
@@ -120,7 +132,7 @@ export function createDirector({ stage, device, poster, screen, carts, homeCart,
   const scr = { key: '', countdown: 9, next: 0, channel: 0 }
   function directScreen(t) {
     const route = ctx.route
-    if (seq?.screen) return // the sequence owns the screen
+    if (seq?.screen || ctx.game?.active) return // a sequence or the mini-game owns the screen
     let key = ''
     if (route.name === 'home') {
       const sec = homeSection()
@@ -134,7 +146,7 @@ export function createDirector({ stage, device, poster, screen, carts, homeCart,
       device.clearOsd('bottom'); device.clearOsd('center')
       if (key === 'title' || key === 'about') {
         device.state.contentTarget = 0
-        if (key === 'title') device.setOsd('bottom', '~PRESS START')
+        if (key === 'title') device.setOsd('bottom', '~PUSH SMILEY TO PLAY')
       } else if (key.startsWith('works')) {
         const i = focusIndex()
         screen.select(projects[i], i, N)
@@ -180,13 +192,13 @@ export function createDirector({ stage, device, poster, screen, carts, homeCart,
     const home = ctx.route.name === 'home'
     const s = scroll.shot
     const fw = scroll.works * (N - 1)
-    const e = clamp((s - (entries.length + 0.2)) / 0.8)
-    const x = clamp((s - (entries.length + 2.05)) / 0.6)
+    const e = clamp((s - 0.2) / 0.8) // slide in while the camera leaves the hero
+    const x = clamp((s - (WORKS_END + 0.05)) / 0.6) // slide out as the about section takes over
     const X0 = F.wide ? -F.hw * 0.02 : 0, Y0 = F.wide ? 0.2 : F.hh * 0.28
     const SP = F.wide ? 1.95 : 2.4, S = F.wide ? 1 : 0.92
     projects.forEach((p, i) => {
       const c = carts.get(p.slug)
-      if (c.inSlot || c.busy) return
+      if (c.inSlot || c.busy || c.drag) return
       const on = home && e > 0.001 && x < 0.999
       c.root.visible = on
       if (!on) return
@@ -195,7 +207,7 @@ export function createDirector({ stage, device, poster, screen, carts, homeCart,
       // queue: upcoming carts climb up-right and back (above the console); played ones slide off left
       const ahead = Math.max(0, d), behind = Math.min(0, d)
       tmpP.set(
-        X0 + ahead * SP * 0.78 + behind * SP * 2.3 + (1 - easeOut(e)) * F.hw * 2.4 - easeIn(x) * F.hw * 2.6,
+        X0 + ahead * SP * 0.78 + behind * (F.hw + 1.4) + (1 - easeOut(e)) * F.hw * 2.4 - easeIn(x) * F.hw * 2.6, // played carts leave the screen entirely
         Y0 + ahead * (F.wide ? 0.62 : 0.5) + behind * 0.15 + w * 0.1 + Math.sin(t * 1.2 + i) * 0.04 * (reduced ? 0 : 1) + hov * 0.12,
         -ahead * 1.5 + behind * 0.6 + w * 0.3,
       )
@@ -208,6 +220,9 @@ export function createDirector({ stage, device, poster, screen, carts, homeCart,
     })
   }
 
+  // 0 on the case hero, 1 once reading (the hero scrolls away)
+  const caseDock = () => (F.wide ? smooth(clamp(scroll.y / (innerHeight * 0.8))) : 0)
+
   // ---------------------------------------------------------------- per frame
   let introK = 1
   const setIntro = (k) => (introK = k)
@@ -216,30 +231,34 @@ export function createDirector({ stage, device, poster, screen, carts, homeCart,
     const route = ctx.route
     tilt.x = damp(tilt.x, ctx.pointer.x, 3.5, dt)
     tilt.y = damp(tilt.y, ctx.pointer.y, 3.5, dt)
+    // scrolling has weight: the console leans into the direction of travel and settles when you stop
+    tilt.lean = damp(tilt.lean, reduced ? 0 : clamp(scroll.vel * 0.006, -0.22, 0.22), 5, dt)
+    // a cartridge is being dragged in: the console rises and squares up so its slot is in reach
+    tilt.lift = damp(tilt.lift, ctx.lift ? 1 : 0, 5, dt)
 
     if (seq) copyPose(target, seq.pose)
-    else if (route.name === 'case') copyPose(target, casePose)
+    else if (route.name === 'case') lerpPose(target, casePose, caseReadPose, caseDock())
     else {
       const s = scroll.shot, i = Math.min(Math.floor(s), shots.length - 2), f = smooth(clamp(s - i))
       lerpPose(target, shots[i], shots[i + 1], f)
     }
-    const k = 1 - Math.exp(-dt * (seq?.k || 3.2))
+    const k = 1 - Math.exp(-dt * (seq?.k || 4.2)) // camera follows scroll closely: smooth, not floaty
     cur.cam.lerp(target.cam, k); cur.look.lerp(target.look, k)
     cur.rigPos.lerp(target.rigPos, k); cur.rigRot.lerp(target.rigRot, k)
-    cur.focus.lerp(target.focus, k)
-    cur.scale = lerp(cur.scale, target.scale, k); cur.poster = lerp(cur.poster, target.poster, k); cur.dof = lerp(cur.dof, target.dof, k)
+    cur.scale = lerp(cur.scale, target.scale, k); cur.poster = lerp(cur.poster, target.poster, k); cur.close = lerp(cur.close, target.close, k)
 
     // intro: rise, spin and pop into place
     const ik = easeOut(introK)
     const fl = reduced || seq ? 0 : 1
-    const close = cur.dof // stickers close-up: calm everything down
+    const close = cur.close // sticker close-ups: calm everything down
     const pt = (1 - close * 0.8) * (seq ? 0 : 1)
     rig.position.copy(cur.rigPos)
     rig.position.y += Math.sin(t * 1.1) * 0.045 * fl * (1 - close * 0.7) + audio.beat * 0.02 + (1 - ik) * -0.7
     if (route.name === 'case' && !F.wide) rig.position.y += (scroll.y / innerHeight) * F.hh * 2
+    rig.position.y += tilt.lift * F.hh * 0.34
     rig.rotation.set(
-      cur.rigRot.x - tilt.y * 0.16 * pt + ctx.drag.y + Math.sin(t * 0.8) * 0.025 * fl,
-      cur.rigRot.y + tilt.x * 0.26 * pt + ctx.drag.x + Math.sin(t * 0.55) * 0.04 * fl * (1 - close) + (1 - ik) * -1.4,
+      cur.rigRot.x - tilt.y * 0.16 * pt + ctx.drag.y + Math.sin(t * 0.8) * 0.025 * fl + tilt.lean * (seq ? 0 : 1),
+      cur.rigRot.y + tilt.x * 0.26 * pt + ctx.drag.x + Math.sin(t * 0.55) * 0.04 * fl * (1 - close) + (1 - ik) * -1.4 + extra.spin,
       cur.rigRot.z + Math.sin(t * 0.7 + 1) * 0.015 * fl,
     )
     rig.scale.setScalar(cur.scale * (0.72 + 0.28 * easeOutBack(introK, 1.4)))
@@ -248,14 +267,16 @@ export function createDirector({ stage, device, poster, screen, carts, homeCart,
     camera.position.x += tilt.x * 0.18 * pt
     camera.position.y += tilt.y * 0.1 * pt
     camera.lookAt(cur.look)
-    stage.setDof(cur.dof, camera.position.distanceTo(cur.focus))
 
     stage.key.target.position.copy(rig.position)
     stage.key.position.copy(rig.position).add(tmpC.set(4.5, 4, 5.5))
 
     // stickers pop when their entry is active
-    const active = route.name === 'home' ? Math.round(scroll.shot) - 1 : -1
+    const active = route.name === 'home' ? Math.round(scroll.shot) - ABOUT : -1
     device.stickers.forEach((e) => (e.active = e.s.entry && entries.indexOf(e.s) === active))
+    // phones: the about copy sits right under the console's back, so the cable reels into its plug
+    const reel = !F.wide && route.name === 'home' && homeSection() === 'about' ? 0.001 : 1
+    device.cable.scale.setScalar(damp(device.cable.scale.x, reel, 7, dt))
 
     const anchor = tmpC.copy(cur.rigPos)
     if (route.name === 'case' && !F.wide) anchor.y += (scroll.y / innerHeight) * F.hh * 2
@@ -273,7 +294,7 @@ export function createDirector({ stage, device, poster, screen, carts, homeCart,
   }
 
   function snap() {
-    if (ctx.route.name === 'case') copyPose(cur, casePose)
+    if (ctx.route.name === 'case') lerpPose(cur, casePose, caseReadPose, caseDock())
     else {
       const s = scroll.shot, i = Math.min(Math.floor(s), shots.length - 2)
       lerpPose(cur, shots[i], shots[i + 1], smooth(clamp(s - i)))
@@ -385,5 +406,13 @@ export function createDirector({ stage, device, poster, screen, carts, homeCart,
     homeCart.inSlot = home
   }
 
-  return { layout, update, snap, insert, eject, resetCarts, homeSection, focusIndex, setIntro, frame: F, get busy() { return !!seq } }
+  const invalidateScreen = () => (scr.key = '') // redraw whatever the scroll position wants on the next frame
+  // konami: a full barrel roll with a hop at the top
+  function spin() {
+    if (extra.busy) return
+    extra.busy = true
+    device.hop(1.4)
+    return tween(1.3, (k) => (extra.spin = k * Math.PI * 2), easeInOut).then(() => { extra.spin = 0; extra.busy = false })
+  }
+  return { layout, update, snap, insert, eject, resetCarts, homeSection, focusIndex, setIntro, invalidateScreen, spin, frame: F, aboutStart: ABOUT, get busy() { return !!seq } }
 }

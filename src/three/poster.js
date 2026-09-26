@@ -23,7 +23,7 @@ export function createPoster(stage, ringText) {
     c.beginPath(); c.arc(0, 0, 1020, 0, TAU); c.arc(0, 0, 812, 0, TAU, true)
     c.fillStyle = '#f53d18'; c.fill()
     c.fillStyle = '#fff'; c.textAlign = 'center'; c.textBaseline = 'middle'
-    c.font = '800 128px Archivo'
+    c.font = '800 108px "Unbounded"'
     const R = 916
     const widths = [...ringText].map((ch) => c.measureText(ch).width)
     const extra = (TAU * R - widths.reduce((a, b) => a + b, 0)) / ringText.length
@@ -39,7 +39,6 @@ export function createPoster(stage, ringText) {
   const badge = new THREE.Mesh(new THREE.PlaneGeometry(2.048, 2.048), badgeMat)
   badge.rotation.z = 3.4
   stage.scene.add(star, badge)
-  stage.noDepth.push(star, badge)
 
   // confetti
   const COUNT = 240
@@ -52,7 +51,8 @@ export function createPoster(stage, ringText) {
     return { p: new THREE.Vector3(), v: new THREE.Vector3(), r: new THREE.Euler(), w: new THREE.Vector3(), life: 0 }
   })
   stage.scene.add(confetti)
-  stage.noDepth.push(confetti)
+  const _hide = new THREE.Matrix4().makeScale(0, 0, 0)
+  for (let i = 0; i < COUNT; i++) confetti.setMatrixAt(i, _hide) // start hidden: idle frames skip updates entirely
   const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _zero = new THREE.Vector3()
   function burst(origin, n = 140, power = 1) {
     let spawned = 0
@@ -67,9 +67,14 @@ export function createPoster(stage, ringText) {
       p.life = 2.6 + rand() * 1.2
     }
   }
+  let idle = true
   function updateConfetti(dt, t) {
+    if (idle && !parts.some((p) => p.life > 0)) return // nothing flying: skip 240 matrix writes + upload
+    idle = false
+    let alive = 0
     parts.forEach((p, i) => {
       if (p.life > 0) {
+        alive++
         p.life -= dt
         p.v.y -= 6.5 * dt
         p.v.multiplyScalar(Math.pow(0.35, dt))
@@ -82,6 +87,7 @@ export function createPoster(stage, ringText) {
       confetti.setMatrixAt(i, _m)
     })
     confetti.instanceMatrix.needsUpdate = true
+    idle = alive === 0 // this frame zeroed the last ones out, so later frames can skip
   }
 
   // amount: 0 hidden .. 1 shown. Scales from 0.9 with opacity, never from nothing.

@@ -8,13 +8,16 @@ import { createPoster } from './three/poster.js'
 import { createCartridge, SLOT_SCALE } from './three/cartridge.js'
 import { createScreen } from './three/screen.js'
 import { createDirector } from './director.js'
+import { createGame } from './game.js'
+import { initCursor } from './cursor.js'
 import { initScroll, rafScroll, measure, update as updateScroll, scroll, lock, scrollTo, worksY, elTop } from './scroll.js'
 import { homeHTML, caseHTML } from './pages.js'
 import { me, projects, homeCart as homeCartData } from './content.js'
 import { audio, sfx, unlockAudio, setMuted, setMusic, updateBeat, getVolume, setVolume } from './audio.js'
-import { updateTweens, tween, wait, clamp, reduced, touch, easeOut, loadImage } from './util.js'
+import { updateTweens, tween, wait, clamp, reduced, touch, easeOut } from './util.js'
 
 const $ = (s, r = document) => r.querySelector(s)
+const clockFmt = new Intl.DateTimeFormat('en-US', { hour: '2-digit', minute: '2-digit', timeZone: me.tz })
 const $$ = (s, r = document) => [...r.querySelectorAll(s)]
 
 const CHANNELS = [
@@ -29,7 +32,7 @@ async function fontsReady() {
   await Promise.race([
     (async () => {
       if (!gf.sheet) await new Promise((r) => gf.addEventListener('load', r, { once: true }))
-      await Promise.all(['250px Pacifico', '400 120px Oswald', '600 34px Oswald', '200px "Archivo Black"', '800 120px Archivo', '400 18px Archivo', '40px VT323'].map((f) => document.fonts.load(f)))
+      await Promise.all(['800 100px "Unbounded"', '700 100px "Unbounded"', '300 100px "Unbounded"', '400 17px "Onest"', '600 17px "Onest"', '500 20px "Martian Mono"', '400 20px "Martian Mono"', '40px VT323'].map((f) => document.fonts.load(f)))
     })(),
     new Promise((r) => setTimeout(r, 5000)),
   ])
@@ -65,6 +68,24 @@ async function main() {
   let lastSec = ''
   const ctx = { route: parseRoute(), project: null, pointer: { x: 0, y: 0 }, drag: { x: 0, y: 0 }, onStop }
   const director = createDirector({ stage, device, poster, screen, carts, homeCart, ctx })
+  const smileyPos = () => device.buttons.find((b) => b.action === 'smiley').g.getWorldPosition(new THREE.Vector3())
+  const game = createGame(device, {
+    onStart: () => { if (!audio.muted) setMusic(true); device.drawSmiley('happy') },
+    onOver: (score, best) => {
+      setMusic(false)
+      device.drawSmiley('smile')
+      if (best && score > 0) { sfx.fanfare(); poster.pop(); poster.burst(smileyPos(), 160) } else sfx.powerOff()
+    },
+  })
+  ctx.game = game
+  function quitGame() {
+    if (!game.active) return
+    game.close()
+    setMusic(false)
+    device.drawSmiley(ctx.route.name === 'case' ? 'eject' : 'smile')
+    director.invalidateScreen()
+  }
+  const cursor = initCursor()
 
   // ---------------------------------------------------------------- routing
   function parseRoute() {
@@ -200,28 +221,67 @@ async function main() {
   })
 
   // ---------------------------------------------------------------- page bindings
-  const ui = { channel: 0, focus: -1, entry: -2, stop: -1, complete: false, flip: 0 }
+  const ui = { channel: 0, focus: -1, entry: -2, stop: -1, complete: false }
+
+  // Headlines rise in word by word: wrap each word of [data-split] in .w > span (keeping <em>/<br>),
+  // then add .in once it's on screen, but never behind the loader.
+  function splitWords(el) {
+    let i = 0
+    const walk = (node) => [...node.childNodes].forEach((n) => {
+      if (n.nodeType === 3) {
+        const frag = document.createDocumentFragment()
+        n.textContent.split(/(\s+)/).forEach((part) => {
+          if (!part) return
+          if (/^\s+$/.test(part)) return frag.append(part)
+          const w = document.createElement('span'); w.className = 'w'
+          const inner = document.createElement('span'); inner.textContent = part; inner.style.setProperty('--i', i++)
+          w.append(inner); frag.append(w)
+        })
+        n.replaceWith(frag)
+      } else if (n.nodeType === 1 && n.tagName !== 'BR') walk(n)
+    })
+    walk(el)
+  }
+  let revealIO = null
+  const revealVisible = () => {
+    $$('[data-split]').forEach((el) => { const r = el.getBoundingClientRect(); if (r.top < innerHeight * 0.92 && r.bottom > 0) el.classList.add('in') })
+    $$('.bezel').forEach((el) => { const r = el.getBoundingClientRect(); if (r.top < innerHeight * 0.88 && r.bottom > 0) el.classList.add('on') })
+  }
+
   function bindPage(route) {
     const on = (sel, ev, fn) => $$(sel).forEach((el) => { el.addEventListener(ev, fn); disposers.push(() => el.removeEventListener(ev, fn)) })
+    $$('[data-split]').forEach(splitWords)
+    revealIO = new IntersectionObserver((es) => es.forEach((x) => started && x.isIntersecting && x.target.classList.add('in')), { rootMargin: '0px 0px -8% 0px' })
+    $$('[data-split]').forEach((el) => revealIO.observe(el))
+    disposers.push(() => revealIO.disconnect())
+    if (started) requestAnimationFrame(revealVisible)
+    tickClock()
     if (route.name === 'home') {
-      const word = $('.flip-word')
-      const iv = setInterval(() => {
-        ui.flip = (ui.flip + 1) % me.flips.length
-        word.classList.add('out')
-        setTimeout(() => { word.textContent = me.flips[ui.flip]; word.classList.remove('out') }, 220)
-      }, 2600)
-      disposers.push(() => clearInterval(iv))
       on('[data-insert]', 'click', (e) => { e.preventDefault(); insertCart(e.currentTarget.dataset.insert) })
       on('[data-sealed]', 'click', () => sealed())
-      on('[data-goto]', 'click', (e) => { sfx.tick(); scrollTo(worksY(+e.currentTarget.dataset.goto, projects.length), { duration: 0.9 }) })
-      on('.start', 'click', (e) => { e.preventDefault(); sfx.coin(); scrollTo(elTop($('#about')), { duration: 1.4 }) })
       on('[data-scrollto]', 'click', (e) => { e.preventDefault(); scrollTo(elTop($(e.currentTarget.dataset.scrollto)), { duration: 1.6 }) })
     } else {
       on('[data-next]', 'click', (e) => { e.preventDefault(); swapCase(e.currentTarget.dataset.next) })
       on('[data-zoom]', 'click', (e) => openLightbox(e.currentTarget.dataset.zoom, e.currentTarget.querySelector('img')?.alt))
+      // pull quotes light up word by word as they scroll through (driven in syncCase)
+      $$('.pull p:not(.meta)').forEach((p) => {
+        let i = +(p.parentNode.dataset.n || 0)
+        const words = p.textContent.split(/(\s+)/)
+        p.textContent = ''
+        for (const w of words) {
+          if (!w || /^\s+$/.test(w)) { p.append(w); continue }
+          const span = document.createElement('span')
+          span.className = 'pw'; span.style.setProperty('--i', i++); span.textContent = w
+          p.append(span)
+        }
+        p.parentNode.dataset.n = i
+      })
       const io = new IntersectionObserver((es) => es.forEach((x) => x.isIntersecting && x.target.classList.add('seen')), { rootMargin: '0px 0px -25% 0px' })
       $$('.level, .stage, .case-hero').forEach((el) => io.observe(el))
-      disposers.push(() => io.disconnect())
+      // every screenshot switches on like a CRT the first time it scrolls in
+      const lit = new IntersectionObserver((es) => es.forEach((x) => { if (x.isIntersecting && started) { x.target.classList.add('on'); lit.unobserve(x.target) } }), { rootMargin: '0px 0px -12% 0px' })
+      $$('.bezel').forEach((el) => lit.observe(el))
+      disposers.push(() => { io.disconnect(); lit.disconnect() })
     }
     on('#app [data-eject]', 'click', (e) => { e.preventDefault(); eject('#work') })
     on('[data-copy]', 'click', (e) => copy(e.currentTarget.dataset.copy))
@@ -261,7 +321,6 @@ async function main() {
     const n = +el.dataset.n || 0
     $('.hud-n').textContent = el.dataset.stage ? `STAGE ${el.dataset.stage}` : n ? `LVL ${String(n).padStart(2, '0')}` : 'START'
     $('.hud-name').textContent = el.dataset.name
-    $('.sec-label').textContent = `${ctx.project.title} · ${el.dataset.name}`
     if (el.hasAttribute('data-complete') && !ui.complete) {
       ui.complete = true
       sfx.fanfare()
@@ -302,11 +361,12 @@ async function main() {
 
   // ---------------------------------------------------------------- 3D picking + console actions
   const ray = new THREE.Raycaster(), ndc = new THREE.Vector2()
+  let lastHit = null
   const visibleDeep = (o) => { for (let p = o.parent; p; p = p.parent) if (!p.visible) return false; return true }
   function pick(x, y) {
     ndc.set((x / innerWidth) * 2 - 1, -(y / innerHeight) * 2 + 1)
     ray.setFromCamera(ndc, stage.camera)
-    for (const h of ray.intersectObjects(pickables, false)) if (visibleDeep(h.object)) return h.object.userData.action || 'body'
+    for (const h of ray.intersectObjects(pickables, false)) if (visibleDeep(h.object)) { lastHit = h; return h.object.userData.action || 'body' }
     return null
   }
   const blocked = (el) => !!el?.closest?.('a, button, input, textarea, select, label, dialog, .chrome, .hud, .loader, [data-no3d]')
@@ -326,7 +386,11 @@ async function main() {
       works: { btn0: '◀ Prev cart', btn1: 'Insert', btn2: 'Next cart ▶', smiley: 'Insert', screen: 'Insert' },
       contact: { btn0: 'Copy email', btn1: 'LinkedIn ↗', btn2: 'GitHub ↗', smiley: 'Say hi', screen: 'Say hi' },
     }
-    const def = { btn0: 'CH · Blue', btn1: 'CH · Gold', btn2: 'CH · Red', smiley: audio.music ? 'Stop music' : 'Play music', screen: 'Static', knob: 'Volume' }
+    if (s === 'title' && game.active) {
+      const G = { btn0: '◀ Move', btn2: 'Move ▶', btn1: 'Pause', smiley: game.state === 'play' ? 'Pause' : 'Play', screen: 'Hold a side to move', clover: 'Quit game' }
+      if (G[a]) return G[a]
+    }
+    const def = { btn0: 'CH · Blue', btn1: 'CH · Gold', btn2: 'CH · Red', smiley: s === 'title' ? 'Play Coffee Run' : audio.music ? 'Stop music' : 'Play music', screen: 'Static', knob: 'Volume' }
     const shared = { clover: 'Power', card: 'Memory card', tag: 'Boing', knob: 'Volume' }
     return L[s]?.[a] || def[a] || shared[a] || ''
   }
@@ -348,7 +412,6 @@ async function main() {
       if (el) scrollTo(elTop(el) + el.offsetHeight / 2 - innerHeight / 2, { duration: 1 })
       return
     }
-    if (a.startsWith('btn') || a === 'smiley') device.tap(a)
     if (s === 'case') {
       if (a === 'btn0') return gotoStop(-1)
       if (a === 'btn2' || a === 'screen') return gotoStop(1)
@@ -365,7 +428,19 @@ async function main() {
       if (a === 'btn1' || a === 'btn2') { sfx.btn(+a[3]); return window.open(me.links[+a[3] - 1].href, '_blank', 'noopener') }
       if (a === 'smiley' || a === 'screen') { sfx.arp(true); poster.pop(); location.href = `mailto:${me.email}`; return }
     }
-    // title / about (and shared toys)
+    // title screen: the smiley boots COFFEE RUN; while it runs the buttons steer
+    if (s === 'title') {
+      if (a === 'smiley' && !game.active) {
+        if (!device.state.power) return sfx.tick()
+        game.open(); game.start(); return
+      }
+      if (game.active) {
+        if (a === 'clover') { quitGame(); sfx.powerOff(); return }
+        if (a === 'screen') { game.steer(lastHit?.uv?.x ?? 0.5, true); return }
+        if (game.press(a)) return
+      }
+    }
+    // about (and shared toys)
     if (a.startsWith('btn')) {
       const i = +a[3]
       sfx.btn(i)
@@ -401,15 +476,92 @@ async function main() {
     }
   }
 
+  // ---------------------------------------------------------------- drag a cartridge into the console (mouse)
+  // Press on the cartridge in focus and pull it toward the console: it follows the pointer on a plane facing
+  // the camera, squares up to the slot when it's close, and dropping it there runs the insert sequence.
+  const cartDrag = { c: null, on: false, near: false, nearK: 0, s0: 1, plane: new THREE.Plane(), hit: new THREE.Vector3(), off: new THREE.Vector3(), target: new THREE.Vector3() }
+  const slotP = new THREE.Vector3(), slotQ = new THREE.Quaternion(), tmpV = new THREE.Vector3(), goal = new THREE.Vector3(), goalQ = new THREE.Quaternion()
+  function cartDragStart(c, x, y) {
+    Object.assign(cartDrag, { c, on: false, near: false, nearK: 0, s0: c.root.scale.x, x, y })
+    stage.camera.getWorldDirection(tmpV)
+    cartDrag.plane.setFromNormalAndCoplanarPoint(tmpV, c.root.position)
+    if (rayPlane(x, y)) cartDrag.off.copy(c.root.position).sub(cartDrag.hit)
+  }
+  function rayPlane(x, y) {
+    ndc.set((x / innerWidth) * 2 - 1, -(y / innerHeight) * 2 + 1)
+    ray.setFromCamera(ndc, stage.camera)
+    return ray.ray.intersectPlane(cartDrag.plane, cartDrag.hit)
+  }
+  function cartDragMove(x, y) {
+    const d = cartDrag
+    if (!d.on) {
+      if (Math.hypot(x - d.x, y - d.y) < 6) return
+      d.on = true; d.c.drag = true; ctx.lift = true
+      document.body.classList.add('dragging')
+      sfx.tick()
+    }
+    if (rayPlane(x, y)) d.target.copy(d.hit).add(d.off)
+    device.slotAnchor.getWorldPosition(slotP)
+    const a = tmpV.copy(d.target).project(stage.camera), ax = a.x, ay = a.y
+    const b = slotP.project(stage.camera)
+    const near = Math.hypot((ax - b.x) * innerWidth / 2, (ay - b.y) * innerHeight / 2) < Math.max(130, innerHeight * 0.2)
+    if (near !== d.near) {
+      d.near = near
+      device.state.slotGlow = near ? 1 : 0
+      if (near) { sfx.hover(4); device.hop(0.35); device.state.glitch = Math.max(device.state.glitch, 0.4) }
+    }
+  }
+  function cartDragEnd() {
+    const d = cartDrag, c = d.c
+    cartDrag.c = null
+    ctx.lift = false
+    device.state.slotGlow = 0
+    document.body.classList.remove('dragging')
+    if (!c) return false
+    if (!d.on) return false // a plain click: the caller inserts
+    c.drag = false
+    if (d.near) insertCart(c.project.slug)
+    else sfx.whoosh()
+    return true
+  }
+  function cartDragTick(dt) {
+    const d = cartDrag
+    if (!d.on || !d.c) return
+    const r = d.c.root, rs = device.rig.scale.x
+    // close to the slot it magnets on: shrinks to slot size, turns to match and parks just under the opening
+    d.nearK += ((d.near ? 1 : 0) - d.nearK) * (1 - Math.exp(-dt * 10))
+    device.slotAnchor.getWorldPosition(slotP); device.slotAnchor.getWorldQuaternion(slotQ)
+    goal.set(0, -1, 0).applyQuaternion(slotQ).multiplyScalar(0.95 * rs).add(slotP)
+    goal.lerpVectors(d.target, goal, d.nearK)
+    r.position.lerp(goal, 1 - Math.exp(-dt * 16))
+    goalQ.slerpQuaternions(stage.camera.quaternion, slotQ, d.nearK)
+    r.quaternion.slerp(goalQ, 1 - Math.exp(-dt * 10))
+    const sc = d.s0 * 0.88 + (SLOT_SCALE * rs - d.s0 * 0.88) * d.nearK // picked up it shrinks a touch, in the slot it matches
+    r.scale.setScalar(r.scale.x + (sc - r.scale.x) * (1 - Math.exp(-dt * 12)))
+  }
+
   // pointer: hover labels, clicks on the console, knob, drag-to-spin
   const drag = { vx: 0, vy: 0 }
+  const shake = { flips: 0, dir: 0, t: 0, until: 0 }
+  function dizzy() {
+    shake.flips = 0
+    if (performance.now() < shake.until) return
+    shake.until = performance.now() + 1800
+    device.drawSmiley('dizzy')
+    device.state.glitch = 1
+    device.shake(1)
+    device.swing(2.2)
+    device.setOsd('center', 'WHOA  WHOA', 1.4)
+    sfx.boing()
+    setTimeout(() => device.drawSmiley(ctx.route.name === 'case' ? 'eject' : audio.music ? 'happy' : 'smile'), 1800)
+  }
   const P = { x: innerWidth / 2, y: innerHeight / 2, moved: true, target: null, hover: null, down: null, knob: null }
-  const tag = $('.cursor-tag')
-  const hideCursorTag = () => tag.classList.remove('show')
+  const hideCursorTag = () => cursor.set('', false)
   addEventListener('pointermove', (e) => {
     P.x = e.clientX; P.y = e.clientY; P.target = e.target; P.moved = true
     ctx.pointer.x = (e.clientX / innerWidth) * 2 - 1
     ctx.pointer.y = -((e.clientY / innerHeight) * 2 - 1)
+    if (cartDrag.c) { cartDragMove(e.clientX, e.clientY); return }
     if (P.knob) {
       const dy = P.knob.y - e.clientY
       P.knob.y = e.clientY
@@ -421,6 +573,10 @@ async function main() {
       const dx = (e.clientX - P.down.x) * 0.007, dy = (e.clientY - P.down.y) * 0.007
       ctx.drag.x = clamp(ctx.drag.x + dx, -1.3, 1.3)
       ctx.drag.y = clamp(ctx.drag.y + dy, -0.9, 0.9)
+      // shake it (4 quick direction flips) and it gets dizzy
+      const now = performance.now(), sg = Math.sign(dx)
+      if (now - shake.t > 650) { shake.flips = 0; shake.t = now }
+      if (Math.abs(dx) > 0.018 && sg !== shake.dir) { shake.dir = sg; if (++shake.flips >= 4) dizzy() }
       P.down.vx = dx / Math.max(0.008, (performance.now() - P.down.t) / 1000); P.down.vy = dy / Math.max(0.008, (performance.now() - P.down.t) / 1000)
       Object.assign(P.down, { x: e.clientX, y: e.clientY, t: performance.now() })
     }
@@ -436,13 +592,20 @@ async function main() {
     }
     // mouse: fire on press (arcade feel). touch/pen: wait for a clean tap so scrolling over a cartridge never inserts it.
     P.down = { action: a, x: e.clientX, y: e.clientY, t: performance.now(), mouse: e.pointerType === 'mouse' }
+    if (a.startsWith('cart:') && P.down.mouse) {
+      const p = projects.find((x) => `cart:${x.slug}` === a)
+      // the cartridge in focus can be dragged in; a plain click still inserts it on release
+      if (!p.comingSoon && projects.indexOf(p) === director.focusIndex() && director.homeSection() === 'works') { cartDragStart(carts.get(p.slug), e.clientX, e.clientY); P.down.cart = true; return }
+    }
     if (a.startsWith('btn') || a === 'smiley') device.press(a, true)
-    if (P.down.mouse) run(a)
+    const held = game.active && (a === 'btn0' || a === 'btn2' || a === 'screen') // steering is press-and-hold, even on touch
+    if (P.down.mouse || held) { P.down.ran = true; run(a) }
   })
   const release = (e) => {
     const d = P.down
-    if (d?.action && !d.mouse && e?.type === 'pointerup' && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 12 && performance.now() - d.t < 600) run(d.action)
-    if (d?.action) device.press(d.action, false)
+    if (d?.cart) { P.down = null; if (!cartDragEnd() && e?.type === 'pointerup') run(d.action); return }
+    if (d?.action && !d.ran && e?.type === 'pointerup' && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 12 && performance.now() - d.t < 600) run(d.action)
+    if (d?.action) { device.press(d.action, false); game.release(d.action); if (d.action === 'screen') game.steer(0.5, false) }
     if (P.down?.drag) { drag.vx = P.down.vx || 0; drag.vy = P.down.vy || 0; document.body.classList.remove('dragging') }
     P.down = null; P.knob = null
   }
@@ -458,6 +621,7 @@ async function main() {
 
   function updateHover() {
     if (!P.moved || touch) return
+    if (cartDrag.on) P.moved = true // keep the label live while the pointer rests mid-drag
     P.moved = false
     const overUI = blocked(P.target)
     const a = !overUI && started && !busy ? pick(P.x, P.y) : null
@@ -467,11 +631,9 @@ async function main() {
       device.state.hover = a
       carts.forEach((c) => (c.hoverT = a === `cart:${c.project.slug}` ? 1 : 0))
     }
-    const label = overUI ? P.domLabel : labelFor(a)
-    document.body.style.cursor = !overUI && a ? (a === 'body' ? 'grab' : a === 'knob' ? 'ns-resize' : 'pointer') : ''
-    tag.textContent = label
-    tag.classList.toggle('show', !!label && !busy)
-    tag.style.transform = `translate3d(${P.x + 16}px, ${P.y + 18}px, 0)`
+    if (cartDrag.on) return cursor.set(cartDrag.near ? 'Release to insert' : 'Into the console', true, true)
+    const label = busy ? '' : overUI ? P.domLabel : a === 'body' ? 'Drag' : a?.startsWith('cart:') && !a.endsWith('khaata') && labelFor(a).startsWith('Insert') ? 'Click or drag in' : labelFor(a)
+    cursor.set(label, !overUI && !!a && a !== 'body')
   }
 
   // ---------------------------------------------------------------- keyboard
@@ -482,7 +644,13 @@ async function main() {
       return
     }
     if (e.key === 'm' || e.key === 'M') return toggleMute()
+    konami(e.key)
     if (busy) return
+    if (game.active) {
+      if (e.key === 'Escape') return quitGame()
+      if (!e.repeat && game.key(e, true)) return e.preventDefault()
+      if (e.repeat && /^(arrow(left|right)|[ad ])$/i.test(e.key)) return e.preventDefault()
+    }
     if (ctx.route.name === 'case') {
       if (e.key === 'ArrowRight') { e.preventDefault(); gotoStop(1, true) }
       else if (e.key === 'ArrowLeft') { e.preventDefault(); gotoStop(-1, true) }
@@ -496,6 +664,23 @@ async function main() {
     }
   })
 
+  addEventListener('keyup', (e) => game.key(e, false))
+
+  // ↑ ↑ ↓ ↓ ← → ← → B A
+  const KONAMI = ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ArrowLeft', 'ArrowRight', 'b', 'a']
+  let kk = 0
+  function konami(key) {
+    const k = key.length === 1 ? key.toLowerCase() : key
+    kk = k === KONAMI[kk] ? kk + 1 : k === KONAMI[0] ? 1 : 0
+    if (kk < KONAMI.length) return
+    kk = 0
+    director.spin()
+    sfx.fanfare(); poster.pop(); poster.burst(smileyPos(), 220, 1.25)
+    device.drawSmiley('happy'); setTimeout(() => device.drawSmiley(ctx.route.name === 'case' ? 'eject' : 'smile'), 2200)
+    if (device.state.power) device.setOsd('center', '+30 LIVES', 2.2)
+    toast('Cheat code accepted · +30 lives')
+  }
+
   // ---------------------------------------------------------------- resize
   function onResize() {
     stage.resize()
@@ -503,23 +688,28 @@ async function main() {
     backdrop.resize()
     measure()
   }
-  addEventListener('resize', onResize)
+  // Debounced, and on touch devices a height-only change (URL bar sliding) is ignored: the canvas is
+  // sized to the large viewport and the layout uses static svh/vh units, so there's nothing to redo.
+  let lastW = innerWidth, lastH = innerHeight, rz = 0
+  addEventListener('resize', () => {
+    if (touch && innerWidth === lastW && Math.abs(innerHeight - lastH) < 160) return
+    lastW = innerWidth; lastH = innerHeight
+    clearTimeout(rz)
+    rz = setTimeout(onResize, 120)
+  })
 
   // ---------------------------------------------------------------- clock
-  const clockFmt = new Intl.DateTimeFormat('en-US', { hour: '2-digit', minute: '2-digit', timeZone: me.tz })
-  const tickClock = () => ($('.clock').textContent = `BLR ${clockFmt.format(new Date())} · 12.97°N 77.59°E`)
-  tickClock(); setInterval(tickClock, 15000)
+  function tickClock() { const el = $('.local-time'); if (el) el.textContent = clockFmt.format(new Date()) }
+  setInterval(tickClock, 30000)
 
   // ---------------------------------------------------------------- per-frame DOM sync (home)
-  const secNames = { title: 'Title screen', about: 'Player one', works: 'Select cartridge', contact: 'Continue?' }
   function syncHome() {
     const s = director.homeSection()
     if (s !== lastSec) {
       lastSec = s
-      $('.sec-label').textContent = secNames[s]
       $$('[data-nav]').forEach((a) => a.classList.toggle('active', (a.dataset.nav === 'work' && s === 'works') || (a.dataset.nav === 'about' && s === 'about') || (a.dataset.nav === 'contact' && s === 'contact')))
     }
-    const entry = Math.round(scroll.shot) - 1
+    const entry = Math.round(scroll.shot) - director.aboutStart
     if (entry !== ui.entry) {
       ui.entry = entry
       $$('.entry').forEach((el, i) => el.classList.toggle('active', i === entry))
@@ -528,16 +718,15 @@ async function main() {
     if (fi !== ui.focus) {
       ui.focus = fi
       $$('.ci').forEach((el, i) => el.classList.toggle('active', i === fi))
-      $$('.cart-dots button').forEach((el, i) => el.classList.toggle('active', i === fi))
     }
-    if (!ui.bar?.isConnected) ui.bar = $('.works .bar i')
-    if (ui.bar) ui.bar.style.transform = `scaleX(${scroll.works})`
   }
-  const hudBar = $('.hud-bar i')
   function syncCase() {
-    const bar = hudBar
-    const max = document.documentElement.scrollHeight - innerHeight
-    if (bar) bar.style.transform = `scaleX(${max > 0 ? scroll.y / max : 0})`
+    for (const q of document.querySelectorAll('.pull')) {
+      const r = q.getBoundingClientRect()
+      if (r.bottom < 0 || r.top > innerHeight) continue
+      const t = clamp((innerHeight * 0.85 - r.top) / (r.height + innerHeight * 0.3))
+      q.style.setProperty('--r', (t * (+q.dataset.n + 2)).toFixed(2))
+    }
   }
 
   // ---------------------------------------------------------------- boot
@@ -551,7 +740,7 @@ async function main() {
   director.snap()
   stage.renderer.compile(stage.scene, stage.camera)
   setLoad(0.7)
-  await Promise.race([Promise.all(projects.map((p) => loadImage(p.cover))), wait(4)])
+  // cartridge labels redraw themselves when their cover lands, so the loader doesn't wait on images
   setLoad(1)
 
   const ldStart = $('.ld-start')
@@ -572,21 +761,29 @@ async function main() {
     ).finished.then(() => ld.remove())
     sfx.powerOff()
     lock(false)
-    tween(reduced ? 0.01 : 1.5, (k) => { director.setIntro(k); introReveal = k }).then(() => {
-      if (ctx.route.name === 'home') setTimeout(() => $('.corner-r')?.classList.add('show'), 200)
-    })
+    tween(reduced ? 0.01 : 1.5, (k) => { director.setIntro(k); introReveal = k })
+    setTimeout(revealVisible, reduced ? 0 : 480) // headline rises as the loader collapses
     await wait(reduced ? 0 : 0.9)
     device.state.power = true
     sfx.powerOn()
     if (ctx.route.name === 'home' && director.homeSection() === 'title') device.setOsd('tl', `CH 01  ${CHANNELS[0].name}`, 2.8)
+    setTimeout(() => (stage.perf.on = true), 2500) // start adapting once shaders are warm and the intro is done
   }
 
+  if (import.meta.env.DEV) window.__app = { stage, director, device, game, carts, ctx }
+
   // ---------------------------------------------------------------- loop
-  const clock = new THREE.Clock()
+  const timer = new THREE.Timer()
   let introReveal = 0
+  let lastMs = 0
+  let chromeAway = false
+  const chrome = $('.chrome')
   stage.renderer.setAnimationLoop((ms) => {
-    const dt = Math.min(clock.getDelta(), 0.05)
-    const t = clock.elapsedTime
+    if (lastMs) stage.adapt(ms - lastMs)
+    lastMs = ms
+    timer.update(ms)
+    const dt = Math.min(timer.getDelta(), 0.05)
+    const t = timer.getElapsed()
     rafScroll(ms)
     updateScroll()
     updateTweens(dt)
@@ -597,13 +794,20 @@ async function main() {
       drag.vy += (-ctx.drag.y * 30 - drag.vy * 6.5) * dt; ctx.drag.y += drag.vy * dt
     }
     carts.forEach((c) => (c.hover = c.hover + ((c.hoverT || 0) - c.hover) * (1 - Math.exp(-dt * 12))))
+    cartDragTick(dt)
     updateHover()
+    if (game.active && (busy || ctx.route.name !== 'home' || director.homeSection() !== 'title')) quitGame()
+    game.update(dt)
     director.update(dt, t)
     device.update(dt, t, { beat: audio.beat, music: audio.music })
     backdrop.update(dt, device.rig.position, easeOut(introReveal) * (ctx.route.name === 'case' ? 0.6 : 1))
     if (ctx.route.name === 'home') syncHome(); else syncCase()
     document.documentElement.classList.toggle('scrolled', scroll.y > 40)
-    stage.render(dt, t)
+    // reading a case study: the header slides away going down and comes back going up
+    const away = ctx.route.name === 'case' && scroll.y > innerHeight * 0.7 && !busy && (scroll.vel > 1.5 ? true : scroll.vel < -1.5 ? false : chromeAway)
+    if (away !== chromeAway) { chromeAway = away; chrome.classList.toggle('away', away) }
+    device.renderScreen(stage.renderer, dt)
+    stage.render()
   })
 }
 
