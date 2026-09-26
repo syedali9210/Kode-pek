@@ -7,7 +7,7 @@ import { createDevice } from './three/device.js'
 import { createPoster } from './three/poster.js'
 import { createCartridge, SLOT_SCALE } from './three/cartridge.js'
 import { createScreen } from './three/screen.js'
-import { createDirector } from './director.js'
+import { createDirector, sectionAt, focusAt, ABOUT_SHOT } from './director.js'
 import { createGame } from './game.js'
 import { initCursor } from './cursor.js'
 import { initScroll, rafScroll, measure, update as updateScroll, scroll, lock, scrollTo, worksY, elTop } from './scroll.js'
@@ -43,33 +43,85 @@ function setLoad(k) {
   $('.ld-pct').textContent = `Loading ${String(Math.round(k * 100)).padStart(2, '0')}%`
 }
 
+// ---------------------------------------------------------------- lite mode (no WebGL)
+// Hardware acceleration off, a blocklisted GPU, some VMs and remote desktops: no WebGL context at all.
+// The site still opens: every page, route and DOM interaction works, a still of the console stands in
+// for the 3D one, and these stand-ins absorb the calls meant for the 3D world.
+const nothing = new Proxy(function () {}, {
+  get: (_, k) => (k === Symbol.toPrimitive ? () => 0 : k === 'then' || typeof k === 'symbol' ? undefined : nothing),
+  apply: () => nothing,
+  set: () => true,
+})
+const liteDirector = (ctx) => {
+  const none = () => {}
+  let stop = -1
+  return {
+    // the 3D director reports case-study stops as it redraws the console screen; do the same for the HUD
+    update() {
+      if (ctx.route.name !== 'case' || scroll.stop === stop) return
+      stop = scroll.stop
+      const el = scroll.stops[stop]
+      if (el) ctx.onStop(stop, el)
+    },
+    snap: () => (stop = -1),
+    layout: none, resetCarts: none, setIntro: none, invalidateScreen: none, spin: none,
+    homeSection: () => sectionAt(scroll.shot), focusIndex: () => focusAt(scroll.works),
+    insert: async (slug, swap) => swap(), eject: async (swap) => swap(),
+    aboutStart: ABOUT_SHOT, frame: {}, busy: false,
+  }
+}
+const liteGame = { active: false, playing: false, state: 'off', open() {}, close() {}, start() {}, press: () => false, release() {}, key: () => false, steer() {}, update() {} }
+
+function create3D() {
+  try {
+    // three.js needs WebGL2; probe quietly first so a machine without it doesn't get a wall of console errors
+    const probe = document.createElement('canvas').getContext('webgl2')
+    if (!probe) throw new Error('WebGL2 is not available')
+    probe.getExtension('WEBGL_lose_context')?.loseContext()
+    const stage = createStage($('#gl'))
+    stage.resize()
+    const backdrop = createBackdrop(stage)
+    const device = createDevice()
+    stage.scene.add(device.rig)
+    const poster = createPoster(stage, 'SYED ALI  •  PRODUCT DESIGNER  •  BENGALURU, IN  •  ')
+    const screen = createScreen(device)
+    const carts = new Map(projects.map((p, i) => [p.slug, createCartridge(p, i)]))
+    carts.forEach((c) => { stage.scene.add(c.root); c.root.visible = false })
+    const homeCart = createCartridge(homeCartData)
+    device.slotAnchor.add(homeCart.root)
+    homeCart.root.scale.setScalar(SLOT_SCALE)
+    homeCart.inSlot = true
+    const pickables = [...device.pickables, ...[...carts.values()].flatMap((c) => c.meshes)]
+    return { stage, backdrop, device, poster, screen, carts, homeCart, pickables }
+  } catch (err) {
+    console.warn('3D unavailable, opening the lite version:', err?.message || err)
+    return null
+  }
+}
+
 async function main() {
   setLoad(0.1)
   await fontsReady()
   setLoad(0.4)
 
   // ---------------------------------------------------------------- world
-  const stage = createStage($('#gl'))
-  stage.resize()
-  const backdrop = createBackdrop(stage)
-  const device = createDevice()
-  stage.scene.add(device.rig)
-  const poster = createPoster(stage, 'SYED ALI  •  PRODUCT DESIGNER  •  BENGALURU, IN  •  ')
-  const screen = createScreen(device)
-  const carts = new Map(projects.map((p, i) => [p.slug, createCartridge(p, i)]))
-  carts.forEach((c) => { stage.scene.add(c.root); c.root.visible = false })
-  const homeCart = createCartridge(homeCartData)
-  device.slotAnchor.add(homeCart.root)
-  homeCart.root.scale.setScalar(SLOT_SCALE)
-  homeCart.inSlot = true
-  const pickables = [...device.pickables, ...[...carts.values()].flatMap((c) => c.meshes)]
+  const world = create3D()
+  const lite = !world
+  const { stage, backdrop, device, poster, screen, carts, homeCart, pickables } = world || { stage: nothing, backdrop: nothing, device: nothing, poster: nothing, screen: nothing, carts: new Map(), homeCart: nothing, pickables: [] }
+  if (lite) {
+    document.documentElement.classList.add('lite')
+    const still = document.createElement('img')
+    Object.assign(still, { className: 'still', src: '/console.webp', alt: '', decoding: 'async' })
+    still.setAttribute('aria-hidden', 'true')
+    $('#gl').after(still)
+  }
 
   let started = false
   let lastSec = ''
   const ctx = { route: parseRoute(), project: null, pointer: { x: 0, y: 0 }, drag: { x: 0, y: 0 }, onStop }
-  const director = createDirector({ stage, device, poster, screen, carts, homeCart, ctx })
+  const director = lite ? liteDirector(ctx) : createDirector({ stage, device, poster, screen, carts, homeCart, ctx })
   const smileyPos = () => device.buttons.find((b) => b.action === 'smiley').g.getWorldPosition(new THREE.Vector3())
-  const game = createGame(device, {
+  const game = lite ? liteGame : createGame(device, {
     onStart: () => { if (!audio.muted) setMusic(true); device.drawSmiley('happy') },
     onOver: (score, best) => {
       setMusic(false)
@@ -100,6 +152,7 @@ async function main() {
     ctx.project = route.name === 'case' ? projects.find((p) => p.slug === route.slug) : null
     $('#app').innerHTML = route.name === 'case' ? caseHTML(ctx.project) : homeHTML()
     document.body.dataset.route = route.name
+    document.body.dataset.sec = route.name === 'case' ? 'case' : 'title'
     document.title = route.name === 'case' ? `${ctx.project.title} — ${me.name} · Case study` : `${me.name} — ${me.role} · Player One`
     $('.hud').hidden = route.name !== 'case'
     director.resetCarts(route)
@@ -331,12 +384,12 @@ async function main() {
 
   // ---------------------------------------------------------------- toast, lightbox, copy
   let toastT = 0
-  function toast(msg) {
+  function toast(msg, ms = 2200) {
     const t = $('.toast')
     t.textContent = msg
     t.classList.add('show')
     clearTimeout(toastT)
-    toastT = setTimeout(() => t.classList.remove('show'), 2200)
+    toastT = setTimeout(() => t.classList.remove('show'), ms)
   }
   function sealed() {
     sfx.denied()
@@ -364,6 +417,7 @@ async function main() {
   let lastHit = null
   const visibleDeep = (o) => { for (let p = o.parent; p; p = p.parent) if (!p.visible) return false; return true }
   function pick(x, y) {
+    if (lite) return null
     ndc.set((x / innerWidth) * 2 - 1, -(y / innerHeight) * 2 + 1)
     ray.setFromCamera(ndc, stage.camera)
     for (const h of ray.intersectObjects(pickables, false)) if (visibleDeep(h.object)) { lastHit = h; return h.object.userData.action || 'body' }
@@ -707,6 +761,7 @@ async function main() {
     const s = director.homeSection()
     if (s !== lastSec) {
       lastSec = s
+      document.body.dataset.sec = s
       $$('[data-nav]').forEach((a) => a.classList.toggle('active', (a.dataset.nav === 'work' && s === 'works') || (a.dataset.nav === 'about' && s === 'about') || (a.dataset.nav === 'contact' && s === 'contact')))
     }
     const entry = Math.round(scroll.shot) - director.aboutStart
@@ -768,6 +823,7 @@ async function main() {
     sfx.powerOn()
     if (ctx.route.name === 'home' && director.homeSection() === 'title') device.setOsd('tl', `CH 01  ${CHANNELS[0].name}`, 2.8)
     setTimeout(() => (stage.perf.on = true), 2500) // start adapting once shaders are warm and the intro is done
+    if (lite) setTimeout(() => toast('Lite mode · 3D is off in this browser', 6000), 1400)
   }
 
   if (import.meta.env.DEV) window.__app = { stage, director, device, game, carts, ctx }
@@ -778,7 +834,8 @@ async function main() {
   let lastMs = 0
   let chromeAway = false
   const chrome = $('.chrome')
-  stage.renderer.setAnimationLoop((ms) => {
+  const loop = lite ? (fn) => requestAnimationFrame(function f(ms) { fn(ms); requestAnimationFrame(f) }) : (fn) => stage.renderer.setAnimationLoop(fn)
+  loop((ms) => {
     if (lastMs) stage.adapt(ms - lastMs)
     lastMs = ms
     timer.update(ms)

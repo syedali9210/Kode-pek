@@ -223,6 +223,10 @@ em { font-style: normal; font-weight: 300; }
   font: 500 11px/1 var(--mono);
   font-stretch: 87.5%;
   letter-spacing: 0.03em;
+  white-space: nowrap; /* centred with left:50%, it would otherwise shrink to half the screen and wrap */
+  max-width: calc(100vw - 32px);
+  overflow: hidden;
+  text-overflow: ellipsis;
   opacity: 0;
   pointer-events: none;
   transition: opacity 180ms ease, translate 220ms var(--ease-out);
@@ -641,6 +645,37 @@ em { font-style: normal; font-weight: 300; }
 
 .inserting .cart-info, .inserting .works-head { opacity: 0; transition: opacity 200ms ease; }
 
+/* ---------------------------------------------------------------- lite mode (no WebGL, see main.js)
+   A still of the console stands in for the 3D one, and each cartridge shows its cover instead. */
+.still, .ci-shot { display: none; }
+.lite #gl { display: none; }
+.lite .still {
+  display: block;
+  position: fixed;
+  z-index: 0;
+  left: max(var(--pad), 5vw);
+  top: 50%;
+  height: min(84vh, calc((53vw - 2 * var(--pad)) / 0.762));
+  width: auto;
+  translate: 0 -50%;
+  pointer-events: none;
+  transition: opacity 400ms ease;
+}
+.lite body[data-sec='works'] .still, .lite body[data-sec='contact'] .still { opacity: 0; }
+.lite body[data-route='case'] .still { left: var(--pad); height: min(76vh, calc((var(--rail) - var(--pad)) / 0.762)); }
+.lite .ci-shot {
+  display: block;
+  position: absolute;
+  left: calc(100% + 5vw);
+  bottom: 0;
+  width: min(44vw, 640px);
+  height: auto;
+  border: 8px solid var(--bezel);
+  border-radius: 16px;
+  background: #eef0f1;
+  box-shadow: 0 24px 44px -24px rgba(0, 0, 0, 0.85);
+}
+
 /* ---------------------------------------------------------------- responsive */
 @media (max-width: 1100px) {
   :root { --rail: 30vw; }
@@ -692,6 +727,10 @@ em { font-style: normal; font-weight: 300; }
   .pf > div + div { padding-left: 0; border-left: 0; border-top: 1px solid var(--hair); }
   .gallery.g2, .gallery.g3, .gallery.g4 { grid-template-columns: 1fr; }
   .hud { left: 12px; right: 12px; bottom: 12px; width: auto; }
+  .lite .still { position: absolute; top: 64px; left: 50%; translate: -50% 0; height: min(50vh, 120vw); }
+  .lite body[data-route='case'] .still { left: 50%; height: min(46vh, 110vw); }
+  .lite .ci-shot { position: static; order: -1; width: 100%; margin-bottom: 8px; }
+  .lite .cart-info { height: auto; }
 }
 /* portrait tablets: stacked, but keep line lengths readable */
 @media (min-width: 600px) and (max-aspect-ratio: 21/20) {

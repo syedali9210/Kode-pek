@@ -38,6 +38,7 @@ export function homeHTML() {
             <article class="ci${i === 0 ? ' active' : ''}" data-i="${i}" style="--c:${p.shell}">
               <p class="meta"><span class="swatch" aria-hidden="true"></span>${pad(i + 1)} <i>—</i> ${esc(p.tag)}</p>
               <h3 class="ci-name">${esc(p.title)}</h3>
+              <img class="ci-shot" src="${p.cover}" alt="" loading="lazy" decoding="async"${dims(p.cover)} />
               <p class="ci-tag">${esc(p.subtitle)}</p>
               <p class="meta dim">${esc(p.context)} · ${esc(p.year)}</p>
               ${p.comingSoon

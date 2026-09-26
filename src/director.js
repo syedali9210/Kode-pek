@@ -13,6 +13,17 @@ const REST = V(-0.16, 0.5, 0.1)
 const ABOUT_ROT = V(0.06, Math.PI - 0.42, -0.05)
 const STAR_OFF = V(0.42, 1.12, -0.9), BADGE_OFF = V(-0.5, -1.05, -0.55)
 
+// Home sections as scroll shots (hero, works in + end, one per sticker entry, contact). Pure, so the
+// no-WebGL "lite" mode in main.js tracks sections the same way the 3D director does.
+const ENTRIES = stickers.filter((s) => s.entry)
+const WORKS_END = 2, ABOUT = 3, CONTACT = ABOUT + ENTRIES.length
+export function sectionAt(shot) {
+  const s = Math.round(shot)
+  return s === 0 ? 'title' : s <= WORKS_END ? 'works' : s < CONTACT ? 'about' : 'contact'
+}
+export const focusAt = (works) => Math.round(works * (projects.length - 1))
+export const ABOUT_SHOT = ABOUT
+
 function pose(o = {}) {
   return { cam: V(), look: V(), rigPos: V(), rigRot: REST.clone(), scale: 1, poster: 0, close: 0, ...o }
 }
@@ -27,8 +38,7 @@ function copyPose(out, a) { return lerpPose(out, a, a, 0) }
 export function createDirector({ stage, device, poster, screen, carts, homeCart, ctx }) {
   const { camera } = stage
   const rig = device.rig
-  const entries = stickers.filter((s) => s.entry)
-  const WORKS_END = 2, ABOUT = 3, CONTACT = ABOUT + entries.length // shot indices
+  const entries = ENTRIES
   const N = projects.length
   let shots = [], casePose = pose(), caseReadPose = pose(), frontPose = pose(), zoomPose = pose(), catchPose = pose()
   const cur = pose(), target = pose()
@@ -122,11 +132,8 @@ export function createDirector({ stage, device, poster, screen, carts, homeCart,
   }
 
   // ---------------------------------------------------------------- which part of the home page we're in
-  function homeSection() {
-    const s = Math.round(scroll.shot)
-    return s === 0 ? 'title' : s <= WORKS_END ? 'works' : s < CONTACT ? 'about' : 'contact'
-  }
-  const focusIndex = () => Math.round(scroll.works * (N - 1))
+  const homeSection = () => sectionAt(scroll.shot)
+  const focusIndex = () => focusAt(scroll.works)
 
   // ---------------------------------------------------------------- screen direction
   const scr = { key: '', countdown: 9, next: 0, channel: 0 }
